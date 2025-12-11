@@ -1,3 +1,4 @@
+
 export const POSSIBLE_POSES = [
   // Basic / Symmetrical
   "arms raised high in a V shape",
@@ -23,7 +24,19 @@ export const POSSIBLE_POSES = [
   "framing the face with both hands (square shape)",
   "right elbow resting on left hand palm, right hand near chin (thinking pose)",
   "both arms extended to the left side parallel to each other",
-  "wrists crossed above head in an X shape"
+  "wrists crossed above head in an X shape",
+
+  // New Challenging Poses
+  "both hands covering ears with elbows pointing out",
+  "palms pressed together in prayer position at center of chest",
+  "wrapping arms around body in a tight self-hug",
+  "right arm curved over head like a halo, left arm down",
+  "both arms extended straight forward towards camera, palms open",
+  "arms extended to sides with elbows bent 90 degrees up (goalpost shape)",
+  "right hand on forehead in a dramatic pose, left hand reaching forward",
+  "fingers interlocked, palms stretching upwards above head",
+  "right hand touching left ear by going over the top of the head",
+  "hands making binoculars shape around eyes"
 ];
 
 export const DIFFICULTY_CONFIG = {

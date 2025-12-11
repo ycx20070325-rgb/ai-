@@ -6,6 +6,7 @@ interface CameraFeedProps {
 
 export interface CameraFeedHandle {
   capture: () => string | null;
+  video: HTMLVideoElement | null;
 }
 
 const CameraFeed = forwardRef<CameraFeedHandle, CameraFeedProps>(({ isActive }, ref) => {
@@ -28,6 +29,9 @@ const CameraFeed = forwardRef<CameraFeedHandle, CameraFeedProps>(({ isActive }, 
       context.drawImage(video, 0, 0, canvas.width, canvas.height);
       
       return canvas.toDataURL('image/jpeg', 0.8);
+    },
+    get video() {
+      return videoRef.current;
     }
   }));
 

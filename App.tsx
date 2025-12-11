@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { RefreshCw, Trophy, Loader2, Play, ChevronRight, ScanLine, Shuffle, Activity, Signal, Zap } from 'lucide-react';
+import { RefreshCw, Trophy, Loader2, Play, ChevronRight, ScanLine, Shuffle, Activity, Signal, Zap, Gamepad2 } from 'lucide-react';
 import CameraFeed, { CameraFeedHandle } from './components/CameraFeed';
+import FruitGame from './components/FruitGame';
 import { generateTargetPoseImage, comparePoses } from './services/geminiService';
 import { GameState, GameLevel, Difficulty } from './types';
 import { POSSIBLE_POSES, DIFFICULTY_CONFIG } from './constants';
@@ -20,6 +21,7 @@ const App: React.FC = () => {
   );
   const [currentLevelIndex, setCurrentLevelIndex] = useState(0);
   const [currentScore, setCurrentScore] = useState(0);
+  const [gameTotalScore, setGameTotalScore] = useState(0); // New Global Score for Fruit/Pose game
   const [feedback, setFeedback] = useState("Align your body with the skeleton");
   const [isVerifying, setIsVerifying] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -60,6 +62,7 @@ const App: React.FC = () => {
 
   const handleGameStart = () => {
     setCurrentLevelIndex(0);
+    setGameTotalScore(0); // Reset total score
     // Reset levels
     setLevels(
       Array.from({ length: TOTAL_LEVELS }, (_, i) => ({
@@ -74,6 +77,10 @@ const App: React.FC = () => {
 
   const handleSwitchPose = () => {
     if (gameState !== GameState.PLAYING || isVerifying || countdown !== null) return;
+    
+    // Penalty for switching (-1)
+    setGameTotalScore(prev => prev - 1);
+    
     // Simply restart the current level to generate a new pose
     startLevel(currentLevelIndex);
   };
@@ -132,6 +139,9 @@ const App: React.FC = () => {
   const handleSuccess = (userImage: string) => {
     setGameState(GameState.SUCCESS_ANIMATION);
     
+    // Reward for success (+2)
+    setGameTotalScore(prev => prev + 2);
+
     // Save user image
     setLevels(prev => {
       const newLevels = [...prev];
@@ -149,6 +159,11 @@ const App: React.FC = () => {
     }
   };
 
+  // Callback for fruit game scoring
+  const handleFruitScore = (delta: number) => {
+    setGameTotalScore(prev => prev + delta);
+  };
+
   // Rendering
   return (
     <div className="fixed inset-0 bg-black flex flex-col md:flex-row overflow-hidden font-sans">
@@ -161,7 +176,7 @@ const App: React.FC = () => {
              POSE MATCH
            </h1>
            <p className="text-neutral-400 mb-8 max-w-lg text-lg">
-             Align your body to match the AI-generated skeleton.
+             Align your body to match the AI skeleton. Slice fruits for bonus points!
            </p>
 
            <div className="flex gap-4 mb-10">
@@ -198,9 +213,9 @@ const App: React.FC = () => {
         <div className="absolute inset-0 z-50 bg-white flex flex-col items-center justify-center p-8 text-center overflow-y-auto">
             <Trophy className="w-16 h-16 text-yellow-500 mb-4 animate-bounce" />
             <h2 className="text-4xl font-bold text-neutral-900 mb-2">SEQUENCE COMPLETE</h2>
-            <p className="text-neutral-500 mb-8 text-lg">
-              Difficulty: <span className="font-bold text-black">{DIFFICULTY_CONFIG[difficulty].label}</span>
-            </p>
+            <div className="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-blue-600 mb-6">
+              {gameTotalScore} PTS
+            </div>
             
             {/* Final Result Composite - Grid Layout for 5 items */}
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8 w-full max-w-5xl">
@@ -267,6 +282,24 @@ const App: React.FC = () => {
           <div className="relative w-full md:w-1/2 h-1/2 md:h-full bg-black">
              <CameraFeed isActive={true} ref={cameraRef} />
              
+             {/* Fruit Game Overlay - Active when Playing */}
+             <FruitGame 
+               isActive={gameState === GameState.PLAYING} 
+               videoElement={cameraRef.current?.video || null}
+               onScoreUpdate={handleFruitScore}
+             />
+
+             {/* Total Score Indicator (Top Left of Camera) */}
+             <div className="absolute top-8 left-8 z-20">
+               <div className="bg-black/40 backdrop-blur-md border border-white/20 p-3 rounded-xl flex items-center gap-3">
+                 <Gamepad2 className="w-6 h-6 text-yellow-400" />
+                 <div>
+                   <p className="text-white font-bold text-2xl leading-none">{gameTotalScore}</p>
+                   <p className="text-neutral-400 text-[10px] uppercase font-bold">Total Score</p>
+                 </div>
+               </div>
+             </div>
+
              {/* Countdown Overlay */}
              {countdown !== null && (
                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
@@ -276,7 +309,7 @@ const App: React.FC = () => {
                </div>
              )}
 
-             {/* Score Overlay */}
+             {/* Pose Match Score Overlay (Top Right) */}
              {currentScore > 0 && (
                <div className="absolute top-8 right-8 z-20">
                  <div className={`flex flex-col items-end ${currentScore >= DIFFICULTY_CONFIG[difficulty].threshold ? 'text-green-400' : 'text-white'}`}>
@@ -302,17 +335,18 @@ const App: React.FC = () => {
                     onClick={handleNextLevel}
                     className="w-full max-w-md bg-green-500 hover:bg-green-400 text-black text-xl font-bold py-6 rounded-2xl shadow-[0_0_40px_rgba(34,197,94,0.5)] transition-all flex items-center justify-center gap-3 animate-bounce-short"
                   >
-                    {currentLevelIndex < TOTAL_LEVELS - 1 ? 'NEXT POSE' : 'FINISH GAME'} <ChevronRight className="w-6 h-6" />
+                    {currentLevelIndex < TOTAL_LEVELS - 1 ? 'NEXT POSE (+2 PTS)' : 'FINISH GAME (+2 PTS)'} <ChevronRight className="w-6 h-6" />
                   </button>
                 ) : (
                   <div className="flex gap-4 w-full max-w-md">
                      <button
                         onClick={handleSwitchPose}
                         disabled={isVerifying || gameState === GameState.GENERATING_TARGET || countdown !== null}
-                        className="bg-white/10 hover:bg-white/20 text-white p-6 rounded-2xl transition-all disabled:opacity-50"
-                        title="Switch Pose"
+                        className="bg-white/10 hover:bg-white/20 text-white p-6 rounded-2xl transition-all disabled:opacity-50 flex flex-col items-center justify-center gap-1"
+                        title="Switch Pose (-1 Point)"
                      >
                         <Shuffle className="w-6 h-6" />
+                        <span className="text-[10px] font-bold text-red-300">-1 PT</span>
                      </button>
                      <button 
                         onClick={startVerificationSequence}
