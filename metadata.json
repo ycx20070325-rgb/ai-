@@ -1,0 +1,7 @@
+{
+  "name": "Gemini Pose Match",
+  "description": "An AI-powered game where you mimic randomly generated wireframe poses. Gemini judges your accuracy.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
