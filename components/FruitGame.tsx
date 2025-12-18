@@ -33,6 +33,8 @@ const ITEMS = [
   { type: 'fruit', emoji: '🍉' },
   { type: 'fruit', emoji: '🍇' },
   { type: 'fruit', emoji: '🍊' },
+  { type: 'fruit', emoji: '🍍' },
+  { type: 'fruit', emoji: '🥝' },
   { type: 'bomb', emoji: '💣' },
 ];
 
@@ -44,9 +46,8 @@ const FruitGame: React.FC<FruitGameProps> = ({ isActive, videoElement, onScoreUp
   const motionCanvasRef = useRef<HTMLCanvasElement>(null);
   const visualCanvasRef = useRef<HTMLCanvasElement>(null);
   const prevFrameRef = useRef<Uint8ClampedArray | null>(null);
-  const handPosRef = useRef<{x: number, y: number} | null>(null); // Tracked hand position (0-100)
+  const motionGridRef = useRef<Uint8Array | null>(null); // Stores motion intensity for the current frame
   const particlesRef = useRef<Particle[]>([]);
-  const haloRotationRef = useRef<number>(0); // Rotation for the halo effect
   
   // Game Loop Refs
   const requestRef = useRef<number>(0);
@@ -54,10 +55,11 @@ const FruitGame: React.FC<FruitGameProps> = ({ isActive, videoElement, onScoreUp
   const spawnedCount = useRef<number>(0);
 
   // Constants
-  const MOTION_THRESHOLD = 25; 
-  const GRID_X = 64; // Increased resolution for better centroid
-  const GRID_Y = 48;
-  const COLLISION_DISTANCE = 12; // Slightly larger for better feel
+  const MOTION_THRESHOLD = 20; 
+  const GRID_X = 64; // Motion grid resolution X
+  const GRID_Y = 48; // Motion grid resolution Y
+  const MAX_ITEMS = 8; // Reduced items for cleaner gameplay
+  const SPAWN_RATE = 1500; // Slower spawn rate (1.5s)
 
   const addFloatingText = (x: number, y: number, text: string, color: string) => {
     const id = Date.now() + Math.random();
@@ -84,41 +86,48 @@ const FruitGame: React.FC<FruitGameProps> = ({ isActive, videoElement, onScoreUp
   const gameLoop = (time: number) => {
     if (!isActive) return;
 
-    // --- 1. Spawning (Max 5 per round) ---
-    if (spawnedCount.current < 5 && time - lastSpawnTime.current > 1200) { 
-      const isBomb = Math.random() < 0.25; 
-      const item = isBomb ? ITEMS[5] : ITEMS[Math.floor(Math.random() * 5)];
+    // --- 1. Spawning Logic ---
+    // Spawn if enough time passed AND (we are under max items)
+    if (time - lastSpawnTime.current > SPAWN_RATE && objects.filter(o => !o.isSliced).length < MAX_ITEMS) { 
+      // 20% chance of bomb
+      const isBomb = Math.random() < 0.2; 
+      const item = isBomb ? ITEMS[ITEMS.length - 1] : ITEMS[Math.floor(Math.random() * (ITEMS.length - 1))];
       
       const newObj: GameObject = {
-        id: time,
+        id: time + Math.random(),
         type: item.type as 'fruit' | 'bomb',
         emoji: item.emoji,
-        x: 10 + Math.random() * 80, 
+        x: 10 + Math.random() * 80, // Keep away from extreme edges
         y: -15, 
-        velocity: 0.3 + Math.random() * 0.2, 
+        // Velocity calc: Distance 125 units (-15 to 110). 
+        // 10s * 60fps = 600 frames. 125/600 ~= 0.208.
+        velocity: 0.2, 
         isSliced: false
       };
       
       setObjects(prev => [...prev, newObj]);
       lastSpawnTime.current = time;
-      spawnedCount.current += 1;
     }
 
-    // --- 2. Motion Detection (Right Hand Tracking) ---
+    // --- 2. Motion Detection (Populate Grid) ---
     if (videoElement && motionCanvasRef.current) {
       const mCanvas = motionCanvasRef.current;
       const ctx = mCanvas.getContext('2d', { willReadFrequently: true });
       
       if (ctx && videoElement.readyState === 4) {
+        // Init motion grid if needed
+        if (!motionGridRef.current) {
+          motionGridRef.current = new Uint8Array(GRID_X * GRID_Y);
+        }
+
         // Draw small frame for motion processing
         ctx.drawImage(videoElement, 0, 0, GRID_X, GRID_Y);
         const frame = ctx.getImageData(0, 0, GRID_X, GRID_Y);
         const data = frame.data;
         const len = data.length;
 
-        let sumX = 0;
-        let sumY = 0;
-        let totalWeight = 0;
+        // Reset grid
+        motionGridRef.current.fill(0);
 
         if (prevFrameRef.current) {
            for (let i = 0; i < len; i += 4) {
@@ -129,58 +138,14 @@ const FruitGame: React.FC<FruitGameProps> = ({ isActive, videoElement, onScoreUp
               
               if (diff > MOTION_THRESHOLD) {
                  const pixelIdx = i / 4;
-                 const x = pixelIdx % GRID_X;
-                 const y = Math.floor(pixelIdx / GRID_X);
-                 
-                 // RIGHT HAND BIAS ALGORITHM
-                 // The camera feed is mirrored on screen, but the raw data corresponds to the sensor.
-                 // Sensor Left (Low X) = User's Right Hand.
-                 // Sensor Right (High X) = User's Left Hand.
-                 // We apply a strong weight multiplier to pixels on the Left side of the sensor.
-                 // This ensures the tracker "favors" the right hand if both are moving.
-                 
-                 const normalizedX = x / GRID_X; // 0.0 to 1.0
-                 // Bias: 4.0 at Left Edge (User Right), 1.0 at Right Edge (User Left)
-                 const handednessBias = 1 + Math.pow(1 - normalizedX, 2) * 3;
-                 
-                 const weightedDiff = diff * handednessBias;
-
-                 sumX += x * weightedDiff;
-                 sumY += y * weightedDiff;
-                 totalWeight += weightedDiff;
+                 // Store motion in grid (1 = motion detected)
+                 if (motionGridRef.current) {
+                    motionGridRef.current[pixelIdx] = 1;
+                 }
               }
            }
         }
-        
         prevFrameRef.current = new Uint8ClampedArray(data);
-
-        // Update Hand Position if meaningful motion detected
-        if (totalWeight > 2000) {
-           const rawAvgX = sumX / totalWeight;
-           const rawAvgY = sumY / totalWeight;
-           
-           // Convert to Game Coordinates (0-100)
-           // Mirror X axis because video is mirrored on screen
-           // rawAvgX (0) -> targetX (100) (Screen Right)
-           const targetX = 100 - (rawAvgX / GRID_X * 100);
-           const targetY = (rawAvgY / GRID_Y * 100);
-
-           if (!handPosRef.current) {
-             handPosRef.current = { x: targetX, y: targetY };
-           } else {
-             // Adaptive Lerp (Smoothing)
-             const dist = Math.hypot(targetX - handPosRef.current.x, targetY - handPosRef.current.y);
-             const lerpFactor = Math.min(0.15 + (dist / 100), 0.6); // Slightly faster response
-
-             handPosRef.current.x += (targetX - handPosRef.current.x) * lerpFactor;
-             handPosRef.current.y += (targetY - handPosRef.current.y) * lerpFactor;
-           }
-
-           // Generate Trail particles
-           if (Math.random() > 0.6) {
-             createParticles(handPosRef.current.x, handPosRef.current.y, '#00ffff', 1);
-           }
-        }
       }
     }
 
@@ -197,25 +162,48 @@ const FruitGame: React.FC<FruitGameProps> = ({ isActive, videoElement, onScoreUp
            obj.y += obj.velocity * 0.1; // Slow down when sliced
          }
 
-         // Check Collision with Hand
-         if (!obj.isSliced && handPosRef.current) {
-            const dx = obj.x - handPosRef.current.x;
-            const dy = obj.y - handPosRef.current.y;
-            // Aspect ratio correction approximation
-            const dist = Math.sqrt(dx*dx + dy*dy * 0.6); 
+         // --- COLLISION LOGIC: Check Grid ---
+         if (!obj.isSliced && motionGridRef.current) {
+            // Mapping Logic:
+            // Object X (0-100) is on screen. Screen is mirrored.
+            // Screen Left (0) = Camera Right (Grid X Max).
+            // Screen Right (100) = Camera Left (Grid X 0).
+            // So we invert X.
+            
+            const gridX = Math.floor((1.0 - (obj.x / 100)) * GRID_X);
+            const gridY = Math.floor((obj.y / 100) * GRID_Y);
 
-            if (dist < COLLISION_DISTANCE) {
-               obj.isSliced = true;
-               obj.slicedAt = now;
-               
-               if (obj.type === 'fruit') {
-                 onScoreUpdate(1);
-                 addFloatingText(obj.x, obj.y, "+1", "text-green-400");
-                 createParticles(obj.x, obj.y, 'yellow', 12);
-               } else {
-                 onScoreUpdate(-3);
-                 addFloatingText(obj.x, obj.y, "-3", "text-red-500");
-                 createParticles(obj.x, obj.y, 'red', 15);
+            // Check boundaries
+            if (gridX >= 0 && gridX < GRID_X && gridY >= 0 && gridY < GRID_Y) {
+               // Check the exact pixel and neighbors (3x3 area) for better hit detection
+               let hit = false;
+               for(let dy = -1; dy <= 1; dy++) {
+                 for(let dx = -1; dx <= 1; dx++) {
+                   const checkX = gridX + dx;
+                   const checkY = gridY + dy;
+                   if (checkX >= 0 && checkX < GRID_X && checkY >= 0 && checkY < GRID_Y) {
+                     if (motionGridRef.current[checkY * GRID_X + checkX] === 1) {
+                       hit = true;
+                       break;
+                     }
+                   }
+                 }
+                 if(hit) break;
+               }
+
+               if (hit) {
+                 obj.isSliced = true;
+                 obj.slicedAt = now;
+                 
+                 if (obj.type === 'fruit') {
+                   onScoreUpdate(1);
+                   addFloatingText(obj.x, obj.y, "+1", "text-green-400");
+                   createParticles(obj.x, obj.y, 'yellow', 12);
+                 } else {
+                   onScoreUpdate(-3);
+                   addFloatingText(obj.x, obj.y, "-3", "text-red-500");
+                   createParticles(obj.x, obj.y, 'red', 15);
+                 }
                }
             }
          }
@@ -238,10 +226,7 @@ const FruitGame: React.FC<FruitGameProps> = ({ isActive, videoElement, onScoreUp
          const w = visualCanvasRef.current.width;
          const h = visualCanvasRef.current.height;
 
-         // Update Rotation
-         haloRotationRef.current += 0.05;
-
-         // Update & Draw Particles
+         // Draw Particles
          particlesRef.current.forEach(p => {
            p.x += p.vx;
            p.y += p.vy;
@@ -251,63 +236,18 @@ const FruitGame: React.FC<FruitGameProps> = ({ isActive, videoElement, onScoreUp
              const px = (p.x / 100) * w;
              const py = (p.y / 100) * h;
              
-             ctx.fillStyle = p.color === '#00ffff' 
-                ? `rgba(0, 255, 255, ${p.life})` 
-                : p.color === 'red'
+             ctx.fillStyle = p.color === 'red'
                   ? `rgba(255, 50, 50, ${p.life})`
                   : `rgba(255, 255, 100, ${p.life})`;
              
              ctx.beginPath();
-             ctx.arc(px, py, p.color === '#00ffff' ? 2 : 5, 0, Math.PI * 2);
+             ctx.arc(px, py, 4, 0, Math.PI * 2);
              ctx.fill();
            }
          });
          
          // Clean dead particles
          particlesRef.current = particlesRef.current.filter(p => p.life > 0);
-
-         // Draw HALO Cursor (Right Hand Indicator)
-         if (handPosRef.current) {
-            const hx = (handPosRef.current.x / 100) * w;
-            const hy = (handPosRef.current.y / 100) * h;
-            const radius = 25;
-            
-            ctx.save();
-            ctx.translate(hx, hy);
-            
-            // 1. Core Glow
-            ctx.shadowBlur = 15;
-            ctx.shadowColor = 'rgba(0, 255, 255, 0.8)';
-            ctx.fillStyle = 'rgba(200, 255, 255, 0.9)';
-            ctx.beginPath();
-            ctx.arc(0, 0, 4, 0, Math.PI * 2);
-            ctx.fill();
-
-            // 2. Inner Rotating Ring
-            ctx.rotate(haloRotationRef.current);
-            ctx.strokeStyle = 'rgba(0, 255, 255, 0.8)';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.arc(0, 0, radius * 0.7, 0, Math.PI * 1.5); // Open ring
-            ctx.stroke();
-
-            // 3. Outer Rotating Ring (Opposite direction)
-            ctx.rotate(-haloRotationRef.current * 2);
-            ctx.strokeStyle = 'rgba(0, 200, 255, 0.5)';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.arc(0, 0, radius, 0, Math.PI * 1.2); // Open ring
-            ctx.stroke();
-            
-            // 4. Decoration dots on outer ring
-            ctx.fillStyle = 'white';
-            ctx.beginPath();
-            ctx.arc(radius, 0, 2, 0, Math.PI * 2);
-            ctx.fill();
-
-            ctx.restore();
-            ctx.shadowBlur = 0;
-         }
        }
     }
 
@@ -317,7 +257,6 @@ const FruitGame: React.FC<FruitGameProps> = ({ isActive, videoElement, onScoreUp
   useEffect(() => {
     // Set Visual Canvas Size to match window initially
     if (visualCanvasRef.current) {
-      // We use a safe default; CSS handles the actual display size
       visualCanvasRef.current.width = window.innerWidth;
       visualCanvasRef.current.height = window.innerHeight;
     }
@@ -333,7 +272,7 @@ const FruitGame: React.FC<FruitGameProps> = ({ isActive, videoElement, onScoreUp
     if (isActive) {
       spawnedCount.current = 0;
       setObjects([]);
-      handPosRef.current = null;
+      motionGridRef.current = null;
       requestRef.current = requestAnimationFrame(gameLoop);
     } else {
       cancelAnimationFrame(requestRef.current);
@@ -352,7 +291,7 @@ const FruitGame: React.FC<FruitGameProps> = ({ isActive, videoElement, onScoreUp
       {/* 1. Motion Proc Canvas (Hidden) */}
       <canvas ref={motionCanvasRef} width={GRID_X} height={GRID_Y} className="hidden" />
 
-      {/* 2. Visual Effects Canvas (Particles, Halo) */}
+      {/* 2. Visual Effects Canvas (Particles) */}
       <canvas 
         ref={visualCanvasRef} 
         className="absolute inset-0 w-full h-full z-50"
@@ -369,14 +308,14 @@ const FruitGame: React.FC<FruitGameProps> = ({ isActive, videoElement, onScoreUp
              >
                {obj.type === 'bomb' ? (
                  <div className="relative">
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-red-600 rounded-full blur-3xl opacity-80 animate-pulse"></div>
-                    <div className="text-9xl animate-bounce">💥</div>
+                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 bg-red-600 rounded-full blur-3xl opacity-80 animate-pulse"></div>
+                    <div className="text-8xl animate-bounce">💥</div>
                  </div>
                ) : (
                  <div className="relative">
                     {/* Slash */}
-                    <div className="absolute top-1/2 left-1/2 w-56 h-3 bg-white -translate-x-1/2 -translate-y-1/2 rotate-[-45deg] shadow-[0_0_20px_rgba(255,255,255,1)] z-10 animate-pulse"></div>
-                    <div className="text-9xl opacity-60 scale-125 transition-all duration-500 ease-out grayscale" style={{ transform: 'rotate(180deg) scale(1.4)' }}>
+                    <div className="absolute top-1/2 left-1/2 w-40 h-2 bg-white -translate-x-1/2 -translate-y-1/2 rotate-[-45deg] shadow-[0_0_20px_rgba(255,255,255,1)] z-10 animate-pulse"></div>
+                    <div className="text-8xl opacity-60 scale-110 transition-all duration-300 ease-out grayscale" style={{ transform: 'rotate(180deg) scale(1.2)' }}>
                       {obj.emoji}
                     </div>
                  </div>
@@ -395,7 +334,7 @@ const FruitGame: React.FC<FruitGameProps> = ({ isActive, videoElement, onScoreUp
               textShadow: '0 4px 15px rgba(0,0,0,0.6)'
             }}
           >
-             <span className="text-9xl select-none filter drop-shadow-2xl">
+             <span className="text-8xl select-none filter drop-shadow-2xl animate-pulse">
                {obj.emoji}
              </span>
           </div>

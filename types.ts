@@ -25,3 +25,9 @@ export interface ComparisonResult {
   score: number; // 0-100
   feedback: string;
 }
+
+export interface GameHistory {
+  timestamp: number;
+  score: number;
+  difficulty: Difficulty;
+}

@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { RefreshCw, Trophy, Loader2, Play, ChevronRight, ScanLine, Shuffle, Activity, Signal, Zap, Gamepad2 } from 'lucide-react';
+import { RefreshCw, Trophy, Loader2, Play, ChevronRight, ScanLine, Shuffle, Activity, Signal, Zap, Gamepad2, History } from 'lucide-react';
 import CameraFeed, { CameraFeedHandle } from './components/CameraFeed';
 import FruitGame from './components/FruitGame';
 import { generateTargetPoseImage, comparePoses } from './services/geminiService';
-import { GameState, GameLevel, Difficulty } from './types';
+import { GameState, GameLevel, Difficulty, GameHistory } from './types';
 import { POSSIBLE_POSES, DIFFICULTY_CONFIG } from './constants';
 
 const TOTAL_LEVELS = 5;
@@ -25,8 +25,21 @@ const App: React.FC = () => {
   const [feedback, setFeedback] = useState("Align your body with the skeleton");
   const [isVerifying, setIsVerifying] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
+  const [highScores, setHighScores] = useState<GameHistory[]>([]);
   
   const cameraRef = useRef<CameraFeedHandle>(null);
+
+  // Load High Scores on Mount
+  useEffect(() => {
+    const saved = localStorage.getItem('poseMatchScores');
+    if (saved) {
+      try {
+        setHighScores(JSON.parse(saved));
+      } catch (e) {
+        console.error("Failed to load scores", e);
+      }
+    }
+  }, []);
 
   // Helper to pick a random pose that hasn't been used recently
   const getRandomPose = () => {
@@ -150,11 +163,28 @@ const App: React.FC = () => {
     });
   };
 
+  const saveGameResult = () => {
+    const newEntry: GameHistory = {
+      timestamp: Date.now(),
+      score: gameTotalScore,
+      difficulty: difficulty
+    };
+    
+    // Keep top 5 scores
+    const updatedScores = [...highScores, newEntry]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+      
+    setHighScores(updatedScores);
+    localStorage.setItem('poseMatchScores', JSON.stringify(updatedScores));
+  };
+
   const handleNextLevel = () => {
     if (currentLevelIndex < TOTAL_LEVELS - 1) {
       setCurrentLevelIndex(prev => prev + 1);
       startLevel(currentLevelIndex + 1);
     } else {
+      saveGameResult();
       setGameState(GameState.FINISHED);
     }
   };
@@ -172,6 +202,26 @@ const App: React.FC = () => {
       {gameState === GameState.IDLE && (
         <div className="absolute inset-0 z-50 bg-neutral-900 flex flex-col items-center justify-center p-8 text-center text-white">
            <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/graphy.png')] opacity-10"></div>
+           
+           {/* High Scores Corner */}
+           <div className="absolute top-6 right-6 md:top-8 md:right-8 bg-black/40 backdrop-blur-md p-4 rounded-xl border border-white/10 text-right min-w-[200px]">
+              <h3 className="text-white font-bold text-sm uppercase mb-3 flex items-center justify-end gap-2 border-b border-white/10 pb-2">
+                <Trophy className="w-4 h-4 text-yellow-500"/> Top Scores
+              </h3>
+              {highScores.length === 0 ? (
+                <p className="text-neutral-500 text-xs py-2">No games played yet</p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {highScores.map((score, i) => (
+                     <div key={i} className="flex justify-between items-center text-xs text-neutral-300">
+                       <span className="opacity-75 bg-white/10 px-1.5 py-0.5 rounded text-[10px]">{DIFFICULTY_CONFIG[score.difficulty].label}</span>
+                       <span className="font-mono font-bold text-white text-yellow-400">{score.score} pts</span> 
+                     </div>
+                  ))}
+                </div>
+              )}
+           </div>
+
            <h1 className="text-6xl md:text-8xl font-bold mb-6 tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
              POSE MATCH
            </h1>
@@ -210,15 +260,17 @@ const App: React.FC = () => {
 
       {/* Finished Screen */}
       {gameState === GameState.FINISHED && (
-        <div className="absolute inset-0 z-50 bg-white flex flex-col items-center justify-center p-8 text-center overflow-y-auto">
-            <Trophy className="w-16 h-16 text-yellow-500 mb-4 animate-bounce" />
-            <h2 className="text-4xl font-bold text-neutral-900 mb-2">SEQUENCE COMPLETE</h2>
-            <div className="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-blue-600 mb-6">
-              {gameTotalScore} PTS
+        <div className="absolute inset-0 z-50 bg-white flex flex-col items-center p-8 text-center overflow-y-auto">
+            <div className="mt-8 flex flex-col items-center">
+              <Trophy className="w-16 h-16 text-yellow-500 mb-4 animate-bounce" />
+              <h2 className="text-4xl font-bold text-neutral-900 mb-2">SEQUENCE COMPLETE</h2>
+              <div className="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-blue-600 mb-6">
+                {gameTotalScore} PTS
+              </div>
             </div>
             
             {/* Final Result Composite - Grid Layout for 5 items */}
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8 w-full max-w-5xl">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8 w-full max-w-5xl px-4">
                 {levels.map((lvl) => (
                   <div key={lvl.id} className="relative aspect-square bg-black rounded-xl overflow-hidden shadow-lg border-2 border-white group">
                     {/* Background: Original Target */}
@@ -236,11 +288,35 @@ const App: React.FC = () => {
                 ))}
             </div>
 
+            <div className="flex flex-col md:flex-row items-start gap-8 w-full max-w-4xl mb-8">
+               {/* Leaderboard on Finish Screen */}
+               <div className="flex-1 w-full bg-neutral-100 rounded-xl p-6 border border-neutral-200">
+                  <h3 className="text-neutral-500 font-bold uppercase text-sm mb-4 flex items-center gap-2">
+                    <History className="w-4 h-4"/> Recent High Scores
+                  </h3>
+                  <div className="flex flex-col gap-2">
+                    {highScores.map((score, i) => (
+                      <div key={i} className={`flex justify-between items-center p-3 rounded-lg ${score.score === gameTotalScore && score.timestamp > Date.now() - 5000 ? 'bg-yellow-100 border border-yellow-200' : 'bg-white'}`}>
+                        <div className="flex items-center gap-3">
+                           <span className="font-mono text-neutral-400 font-bold text-sm">#{i+1}</span>
+                           <span className={`text-xs px-2 py-1 rounded font-bold uppercase ${
+                              score.difficulty === Difficulty.HARD ? 'bg-red-100 text-red-600' :
+                              score.difficulty === Difficulty.MEDIUM ? 'bg-yellow-100 text-yellow-600' :
+                              'bg-green-100 text-green-600'
+                           }`}>{DIFFICULTY_CONFIG[score.difficulty].label}</span>
+                        </div>
+                        <span className="font-bold text-neutral-900">{score.score} pts</span>
+                      </div>
+                    ))}
+                  </div>
+               </div>
+            </div>
+
             <button 
               onClick={() => setGameState(GameState.IDLE)}
-              className="bg-black text-white px-10 py-4 rounded-full font-bold hover:scale-105 transition-all flex items-center gap-3 shadow-xl mb-8"
+              className="bg-black text-white px-10 py-4 rounded-full font-bold hover:scale-105 transition-all flex items-center gap-3 shadow-xl mb-12"
             >
-              <RefreshCw className="w-5 h-5" /> RESTART
+              <RefreshCw className="w-5 h-5" /> PLAY AGAIN
             </button>
         </div>
       )}
